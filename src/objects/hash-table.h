@@ -404,6 +404,9 @@ class V8_EXPORT_PRIVATE EphemeronHashTable
  protected:
   friend class MarkCompactCollector;
   friend class ScavengerCollector;
+  // Change Start
+  friend class CopyingCollector;
+  // Change End
   friend class third_party_heap::Impl;
   friend class HashTable<EphemeronHashTable, ObjectHashTableShape>;
   friend class ObjectHashTableBase<EphemeronHashTable, ObjectHashTableShape>;

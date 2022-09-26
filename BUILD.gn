@@ -4025,6 +4025,9 @@ v8_source_set("v8_base_without_compiler") {
 
   sources = [
     ### gcmole(all) ###
+    # Change start
+    "src/heap/copying-collector.cc",
+    # Change End
     "src/api/api-arguments.cc",
     "src/api/api-natives.cc",
     "src/api/api.cc",

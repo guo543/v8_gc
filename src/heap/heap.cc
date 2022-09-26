@@ -74,6 +74,9 @@
 #include "src/heap/safepoint.h"
 #include "src/heap/scavenge-job.h"
 #include "src/heap/scavenger-inl.h"
+// Change Start
+#include "src/heap/copying-inl.h"
+// Change End
 #include "src/heap/stress-marking-observer.h"
 #include "src/heap/stress-scavenge-observer.h"
 #include "src/heap/sweeper.h"
@@ -2710,6 +2713,7 @@ void Heap::EvacuateYoungGeneration() {
 }
 
 void Heap::Scavenge() {
+  PrintF("Scavenge\n");
   DCHECK_NOT_NULL(new_space());
 
   if (FLAG_trace_incremental_marking && !incremental_marking()->IsStopped()) {
@@ -2762,6 +2766,9 @@ void Heap::Scavenge() {
 
   // Implements Cheney's copying algorithm
   scavenger_collector_->CollectGarbage();
+  // Change Start
+  //copying_collector_->CollectGarbage();
+  // Change End
 
   SetGCState(NOT_IN_GC);
 }
@@ -5775,6 +5782,10 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
   scavenger_collector_.reset(new ScavengerCollector(this));
   minor_mark_compact_collector_.reset(new MinorMarkCompactCollector(this));
 
+  // Change Start
+  copying_collector_.reset(new CopyingCollector(this));
+  // Change End
+
   incremental_marking_.reset(
       new IncrementalMarking(this, mark_compact_collector_->weak_objects()));
 
@@ -6175,6 +6186,9 @@ void Heap::TearDown() {
   }
 
   scavenger_collector_.reset();
+  // Change Start
+  copying_collector_.reset();
+  // Change End
   array_buffer_sweeper_.reset();
   incremental_marking_.reset();
   concurrent_marking_.reset();

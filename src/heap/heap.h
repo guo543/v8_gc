@@ -105,6 +105,10 @@ class SafepointScope;
 class ScavengeJob;
 class Scavenger;
 class ScavengerCollector;
+// Change Start
+class Copying;
+class CopyingCollector;
+// Change End
 class SharedReadOnlySpace;
 class Space;
 class StressScavengeObserver;
@@ -2322,6 +2326,9 @@ class Heap {
   std::unique_ptr<MarkCompactCollector> mark_compact_collector_;
   std::unique_ptr<MinorMarkCompactCollector> minor_mark_compact_collector_;
   std::unique_ptr<ScavengerCollector> scavenger_collector_;
+  // Change Start
+  std::unique_ptr<CopyingCollector> copying_collector_;
+  // Change End
   std::unique_ptr<ArrayBufferSweeper> array_buffer_sweeper_;
 
   std::unique_ptr<MemoryAllocator> memory_allocator_;
@@ -2493,6 +2500,10 @@ class Heap {
   friend class ReadOnlyRoots;
   friend class Scavenger;
   friend class ScavengerCollector;
+  // Change Start
+  friend class Copying;
+  friend class CopyingCollector;
+  // Change End
   friend class StressConcurrentAllocationObserver;
   friend class Space;
   friend class Sweeper;
