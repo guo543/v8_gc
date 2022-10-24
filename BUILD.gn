@@ -4027,6 +4027,7 @@ v8_source_set("v8_base_without_compiler") {
     ### gcmole(all) ###
     # Change start
     "src/heap/copying-collector.cc",
+    "src/heap/snapshot-collector.cc",
     # Change End
     "src/api/api-arguments.cc",
     "src/api/api-natives.cc",

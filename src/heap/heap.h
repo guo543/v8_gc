@@ -108,6 +108,7 @@ class ScavengerCollector;
 // Change Start
 class Copying;
 class CopyingCollector;
+class SnapshotCollector;
 // Change End
 class SharedReadOnlySpace;
 class Space;
@@ -1913,6 +1914,10 @@ class Heap {
   // Performs a minor collection of just the young generation.
   void MinorMarkCompact();
 
+  // Change Start
+  void Snapshot();
+  // Change End
+
   // Code to be run before and after mark-compact.
   void MarkCompactPrologue();
   void MarkCompactEpilogue();
@@ -2328,6 +2333,7 @@ class Heap {
   std::unique_ptr<ScavengerCollector> scavenger_collector_;
   // Change Start
   std::unique_ptr<CopyingCollector> copying_collector_;
+  std::unique_ptr<SnapshotCollector> snapshot_collector_;
   // Change End
   std::unique_ptr<ArrayBufferSweeper> array_buffer_sweeper_;
 
@@ -2503,6 +2509,7 @@ class Heap {
   // Change Start
   friend class Copying;
   friend class CopyingCollector;
+  friend class SnapshotCollector;
   // Change End
   friend class StressConcurrentAllocationObserver;
   friend class Space;

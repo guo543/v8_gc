@@ -76,6 +76,7 @@
 #include "src/heap/scavenger-inl.h"
 // Change Start
 #include "src/heap/copying-inl.h"
+#include "src/heap/snapshot-collector.h"
 // Change End
 #include "src/heap/stress-marking-observer.h"
 #include "src/heap/stress-scavenge-observer.h"
@@ -2259,6 +2260,10 @@ size_t Heap::PerformGarbageCollection(
     const char* collector_reason, const v8::GCCallbackFlags gc_callback_flags) {
   DisallowJavascriptExecution no_js(isolate());
 
+  // Change Start
+  //PrintF("Perform Garbage Collection\n");
+  // Change End
+
   if (IsYoungGenerationCollector(collector)) {
     CompleteSweepingYoung(collector);
     tracer()->StartCycle(collector, gc_reason, collector_reason,
@@ -2310,6 +2315,10 @@ size_t Heap::PerformGarbageCollection(
 
   size_t start_young_generation_size =
       NewSpaceSize() + (new_lo_space() ? new_lo_space()->SizeOfObjects() : 0);
+
+  // Change Start
+  Snapshot();
+  // Change End
 
   switch (collector) {
     case GarbageCollector::MARK_COMPACTOR:
@@ -2713,7 +2722,6 @@ void Heap::EvacuateYoungGeneration() {
 }
 
 void Heap::Scavenge() {
-  PrintF("Scavenge\n");
   DCHECK_NOT_NULL(new_space());
 
   if (FLAG_trace_incremental_marking && !incremental_marking()->IsStopped()) {
@@ -2772,6 +2780,13 @@ void Heap::Scavenge() {
 
   SetGCState(NOT_IN_GC);
 }
+
+// Change Start
+void Heap::Snapshot() {
+  PrintF("Snapshot GC\n");
+  snapshot_collector_->PrintRootObjects();
+}
+// Change End
 
 void Heap::ComputeFastPromotionMode() {
   if (!new_space_) return;
@@ -5784,6 +5799,7 @@ void Heap::SetUp(LocalHeap* main_thread_local_heap) {
 
   // Change Start
   copying_collector_.reset(new CopyingCollector(this));
+  snapshot_collector_.reset(new SnapshotCollector(this));
   // Change End
 
   incremental_marking_.reset(
@@ -6188,6 +6204,7 @@ void Heap::TearDown() {
   scavenger_collector_.reset();
   // Change Start
   copying_collector_.reset();
+  snapshot_collector_.reset();
   // Change End
   array_buffer_sweeper_.reset();
   incremental_marking_.reset();
