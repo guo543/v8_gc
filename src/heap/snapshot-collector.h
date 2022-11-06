@@ -19,6 +19,8 @@ class SnapshotCollector {
   void MarkRoots();
   void MarkRootObject(Root root, HeapObject obj);
 
+  void DrainMarkingWorklist();
+
   inline Heap* heap() { return heap_; }
   inline bool is_shared_heap() const { return is_shared_heap_; }
   

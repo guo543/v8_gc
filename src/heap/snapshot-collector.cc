@@ -2,6 +2,10 @@
 
 #include "src/objects/visitors.h"
 #include "src/objects/objects.h"
+#include "marking-worklist-inl.h"
+#include "src/heap/objects-visiting.h"
+#include "src/objects/objects-body-descriptors-inl.h"
+#include "src/objects/objects-inl.h"
 
 namespace v8 {
 namespace internal {
@@ -94,6 +98,42 @@ class SnapshotCollector::RootMarkingVisitor final : public RootVisitor {
   const bool is_shared_heap_;
 };
 
+class SnapshotMarkingVisitor {
+ public:
+  SnapshotMarkingVisitor(MarkingWorklists::Local* local_marking_worklists, Heap* heap)
+      : local_marking_worklists_(local_marking_worklists),
+        heap_(heap) {
+  }
+
+  void VisitMapPointer(HeapObject host) {
+
+  }
+
+  void VisitPointers(HeapObject host, ObjectSlot start, ObjectSlot end) {
+    for (ObjectSlot slot = start; slot < end; ++slot) {
+      Isolate* isolate = heap_->isolate();
+      PtrComprCageBase cage_base(isolate);
+      typename ObjectSlot::TObject object =
+        slot.Relaxed_Load(cage_base);
+      HeapObject heap_object;
+      if (object.GetHeapObject(&heap_object)) {
+        local_marking_worklists_->Push(heap_object);
+        if (heap_object.IsJSObject() && !heap_object.IsJSFunction()) {
+          PrintF("JS object %p pushed to worklist\n", reinterpret_cast<void*>(heap_object.ptr()));
+          heap_object.Print();
+        }
+      } else if (object.InSharedHeap()) {
+        PrintF("JS object %p in shared heap\n", reinterpret_cast<void*>(heap_object.ptr()));
+        object.Print();
+      }
+    }
+  }
+
+ private:
+  MarkingWorklists::Local* const local_marking_worklists_;
+  Heap* const heap_;
+};
+
 SnapshotCollector::SnapshotCollector(Heap* heap)
     : isolate_(heap->isolate()),
       heap_(heap),
@@ -125,12 +165,31 @@ void SnapshotCollector::StartMarking() {
 
 void SnapshotCollector::CollectGarbage() {
   MarkRoots();
+
+  DrainMarkingWorklist();
 }
 
 void SnapshotCollector::MarkRoots() {
   RootMarkingVisitor rootVisitor(this);
 
   heap_->IterateRoots(&rootVisitor, base::EnumSet<SkipRoot>{SkipRoot::kWeak});
+}
+
+void SnapshotCollector::DrainMarkingWorklist() {
+  HeapObject obj;
+  Isolate* isolate = heap()->isolate();
+  PtrComprCageBase cage_base(isolate);
+  while (local_marking_worklists()->Pop(&obj) ||
+         local_marking_worklists()->PopOnHold(&obj)) {
+
+    if (obj.IsJSObject() && !obj.IsJSFunction()) {
+      PrintF("JS object %p poped from worklist\n", reinterpret_cast<void*>(obj.ptr()));
+      SnapshotMarkingVisitor visitor(local_marking_worklists_.get(), heap());
+      Map map = obj.map(cage_base);
+      int size = JSObject::BodyDescriptor::SizeOf(map, obj);
+      JSObject::FastBodyDescriptor::IterateBody(map, obj, size, &visitor);
+    }
+  }
 }
 
 void SnapshotCollector::MarkRootObject(Root root, HeapObject obj) {
