@@ -874,6 +874,12 @@ class Heap {
     return mark_compact_collector_.get();
   }
 
+  // Change Start
+  SnapshotCollector* snapshot_collector() {
+    return snapshot_collector_.get();
+  }
+  // Change End
+
   MinorMarkCompactCollector* minor_mark_compact_collector() {
     return minor_mark_compact_collector_.get();
   }

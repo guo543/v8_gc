@@ -2573,6 +2573,15 @@ void Heap::CallGCEpilogueCallbacks(GCType gc_type, GCCallbackFlags flags) {
   }
 }
 
+// Change Start
+void Heap::Snapshot() {
+  PrintF("Snapshot GC\n");
+  snapshot_collector()->Prepare();
+
+  snapshot_collector()->CollectGarbage();
+}
+// Change End
+
 void Heap::MarkCompact() {
   PauseAllocationObserversScope pause_observers(this);
 
@@ -2780,13 +2789,6 @@ void Heap::Scavenge() {
 
   SetGCState(NOT_IN_GC);
 }
-
-// Change Start
-void Heap::Snapshot() {
-  PrintF("Snapshot GC\n");
-  snapshot_collector_->PrintRootObjects();
-}
-// Change End
 
 void Heap::ComputeFastPromotionMode() {
   if (!new_space_) return;
