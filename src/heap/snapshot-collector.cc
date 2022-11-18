@@ -122,9 +122,6 @@ class SnapshotMarkingVisitor {
           PrintF("JS object %p pushed to worklist\n", reinterpret_cast<void*>(heap_object.ptr()));
           heap_object.Print();
         }
-      } else if (object.InSharedHeap()) {
-        PrintF("JS object %p in shared heap\n", reinterpret_cast<void*>(heap_object.ptr()));
-        object.Print();
       }
     }
   }
@@ -137,7 +134,8 @@ class SnapshotMarkingVisitor {
 SnapshotCollector::SnapshotCollector(Heap* heap)
     : isolate_(heap->isolate()),
       heap_(heap),
-      is_shared_heap_(heap->IsShared()) {}
+      is_shared_heap_(heap->IsShared()),
+      marking_state_(heap->isolate()) {}
 
 void SnapshotCollector::PrintRootObjects() {
   PrintVisitor print_visitor;
@@ -163,10 +161,17 @@ void SnapshotCollector::StartMarking() {
                : MarkingWorklists::Local::kNoCppMarkingState);
 }
 
+void SnapshotCollector::Finish() {
+  local_marking_worklists_.reset();
+  marking_worklists_.ReleaseContextWorklists();
+}
+
 void SnapshotCollector::CollectGarbage() {
   MarkRoots();
 
   DrainMarkingWorklist();
+
+  Finish();
 }
 
 void SnapshotCollector::MarkRoots() {
@@ -193,10 +198,12 @@ void SnapshotCollector::DrainMarkingWorklist() {
 }
 
 void SnapshotCollector::MarkRootObject(Root root, HeapObject obj) {
-  local_marking_worklists()->Push(obj);
-  if (obj.IsJSObject() && !obj.IsJSFunction()) {
-    obj.Print();
-  }
+  //if (marking_state()->WhiteToGrey(obj)) {
+    local_marking_worklists()->Push(obj);
+    if (obj.IsJSObject() && !obj.IsJSFunction()) {
+      obj.Print();
+    }
+  //}
 }
 
 } // namespace internal
