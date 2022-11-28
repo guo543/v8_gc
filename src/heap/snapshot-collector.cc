@@ -7,10 +7,74 @@
 #include "src/objects/objects-body-descriptors-inl.h"
 #include "src/objects/objects-inl.h"
 
+#include "src/heap/mark-compact.h"
+
+#include <unordered_map>
+#include <unordered_set>
+
+#include "src/base/logging.h"
+#include "src/base/optional.h"
+#include "src/base/utils/random-number-generator.h"
+#include "src/codegen/compilation-cache.h"
+#include "src/common/globals.h"
+#include "src/deoptimizer/deoptimizer.h"
+#include "src/execution/execution.h"
+#include "src/execution/frames-inl.h"
+#include "src/execution/isolate-utils-inl.h"
+#include "src/execution/isolate-utils.h"
+#include "src/execution/vm-state-inl.h"
+#include "src/handles/global-handles.h"
+#include "src/heap/array-buffer-sweeper.h"
+#include "src/heap/basic-memory-chunk.h"
+#include "src/heap/code-object-registry.h"
+#include "src/heap/concurrent-allocator.h"
+#include "src/heap/evacuation-allocator-inl.h"
+#include "src/heap/gc-tracer.h"
+#include "src/heap/heap.h"
+#include "src/heap/incremental-marking-inl.h"
+#include "src/heap/index-generator.h"
+#include "src/heap/invalidated-slots-inl.h"
+#include "src/heap/large-spaces.h"
+#include "src/heap/mark-compact-inl.h"
+#include "src/heap/marking-barrier.h"
+#include "src/heap/marking-visitor-inl.h"
+#include "src/heap/marking-visitor.h"
+#include "src/heap/memory-chunk-layout.h"
+#include "src/heap/memory-measurement-inl.h"
+#include "src/heap/memory-measurement.h"
+#include "src/heap/object-stats.h"
+#include "src/heap/objects-visiting-inl.h"
+#include "src/heap/parallel-work-item.h"
+#include "src/heap/read-only-heap.h"
+#include "src/heap/read-only-spaces.h"
+#include "src/heap/safepoint.h"
+#include "src/heap/spaces-inl.h"
+#include "src/heap/sweeper.h"
+#include "src/heap/weak-object-worklists.h"
+#include "src/ic/stub-cache.h"
+#include "src/init/v8.h"
+#include "src/logging/tracing-flags.h"
+#include "src/objects/embedder-data-array-inl.h"
+#include "src/objects/foreign.h"
+#include "src/objects/hash-table-inl.h"
+#include "src/objects/instance-type.h"
+#include "src/objects/js-array-buffer-inl.h"
+#include "src/objects/js-objects-inl.h"
+#include "src/objects/maybe-object.h"
+#include "src/objects/objects.h"
+#include "src/objects/slots-inl.h"
+#include "src/objects/smi.h"
+#include "src/objects/transitions-inl.h"
+#include "src/objects/visitors.h"
+#include "src/snapshot/shared-heap-serializer.h"
+#include "src/tasks/cancelable-task.h"
+#include "src/tracing/tracing-category-observer.h"
+#include "src/utils/utils-inl.h"
+
 namespace v8 {
 namespace internal {
 
-class PrintVisitor : public RootVisitor {
+class RootPrintVisitor : public RootVisitor {
  public:
   void VisitRootPointer(Root root, const char* description,
                         FullObjectSlot p) override {
@@ -138,7 +202,7 @@ SnapshotCollector::SnapshotCollector(Heap* heap)
       marking_state_(heap->isolate()) {}
 
 void SnapshotCollector::PrintRootObjects() {
-  PrintVisitor print_visitor;
+  RootPrintVisitor print_visitor;
 
   heap_->IterateRoots(&print_visitor, base::EnumSet<SkipRoot>{SkipRoot::kWeak});
 }
@@ -155,10 +219,18 @@ void SnapshotCollector::StartMarking() {
 
   auto* cpp_heap = CppHeap::From(heap_->cpp_heap());
 
+  code_flush_mode_ = Heap::GetCodeFlushMode(isolate());
+
   local_marking_worklists_ = std::make_unique<MarkingWorklists::Local>(
       marking_worklists(),
       cpp_heap ? cpp_heap->CreateCppMarkingStateForMutatorThread()
                : MarkingWorklists::Local::kNoCppMarkingState);
+  local_weak_objects_ = std::make_unique<WeakObjects::Local>(weak_objects());
+  marking_visitor_ = std::make_unique<MarkingVisitor>(
+      marking_state(), local_marking_worklists(), local_weak_objects_.get(),
+      heap_, epoch(), code_flush_mode(),
+      heap_->local_embedder_heap_tracer()->InUse(),
+      heap_->ShouldCurrentGCKeepAgesUnchanged());
 }
 
 void SnapshotCollector::Finish() {
@@ -167,43 +239,78 @@ void SnapshotCollector::Finish() {
 }
 
 void SnapshotCollector::CollectGarbage() {
-  MarkRoots();
-
-  DrainMarkingWorklist();
+  MarkLiveObjects();
 
   Finish();
 }
 
-void SnapshotCollector::MarkRoots() {
-  RootMarkingVisitor rootVisitor(this);
+void SnapshotCollector::MarkLiveObjects() {
+  RootMarkingVisitor root_visitor(this);
+  MarkRoots(&root_visitor);
 
-  heap_->IterateRoots(&rootVisitor, base::EnumSet<SkipRoot>{SkipRoot::kWeak});
+  DrainMarkingWorklist();
+}
+
+void SnapshotCollector::MarkRoots(RootVisitor* root_visitor) {
+
+  heap_->IterateRootsIncludingClients(root_visitor, base::EnumSet<SkipRoot>{SkipRoot::kWeak});
 }
 
 void SnapshotCollector::DrainMarkingWorklist() {
-  HeapObject obj;
+  HeapObject object;
+  size_t bytes_processed = 0;
+  size_t objects_processed = 0;
+  //bool is_per_context_mode = local_marking_worklists()->IsPerContextMode();
   Isolate* isolate = heap()->isolate();
   PtrComprCageBase cage_base(isolate);
-  while (local_marking_worklists()->Pop(&obj) ||
-         local_marking_worklists()->PopOnHold(&obj)) {
-
-    if (obj.IsJSObject() && !obj.IsJSFunction()) {
-      PrintF("JS object %p poped from worklist\n", reinterpret_cast<void*>(obj.ptr()));
-      SnapshotMarkingVisitor visitor(local_marking_worklists_.get(), heap());
-      Map map = obj.map(cage_base);
-      int size = JSObject::BodyDescriptor::SizeOf(map, obj);
-      JSObject::FastBodyDescriptor::IterateBody(map, obj, size, &visitor);
+  while (local_marking_worklists()->Pop(&object) ||
+         local_marking_worklists()->PopOnHold(&object)) {
+    if (object.IsFreeSpaceOrFiller(cage_base)) {
+      // Due to copying mark bits and the fact that grey and black have their
+      // first bit set, one word fillers are always black.
+      DCHECK_IMPLIES(object.map(cage_base) ==
+                         ReadOnlyRoots(isolate).one_pointer_filler_map(),
+                     marking_state()->IsBlack(object));
+      // Other fillers may be black or grey depending on the color of the object
+      // that was trimmed.
+      DCHECK_IMPLIES(object.map(cage_base) !=
+                         ReadOnlyRoots(isolate).one_pointer_filler_map(),
+                     marking_state()->IsBlackOrGrey(object));
+      continue;
     }
+
+    DCHECK(object.IsHeapObject());
+    DCHECK(heap()->Contains(object));
+    // DCHECK(!(marking_state()->IsWhite(object)));
+    
+    // if (object.IsJSObject() && !object.IsJSFunction()) {
+    //   PrintF("JS object %p poped from worklist\n", reinterpret_cast<void*>(object.ptr()));
+    //   SnapshotMarkingVisitor visitor(local_marking_worklists_.get(), heap());
+    //   Map map = object.map(cage_base);
+    //   int size = JSObject::BodyDescriptor::SizeOf(map, object);
+    //   JSObject::FastBodyDescriptor::IterateBody(map, object, size, &visitor);
+    // }
+
+    Map map = object.map(cage_base);
+    size_t visited_size = marking_visitor_->Visit(map, object);
+
+    bytes_processed += visited_size;
+    objects_processed++;
   }
+
+  PrintF("bytes_processed: %zu, object_processed: %zu", bytes_processed, objects_processed);
 }
 
 void SnapshotCollector::MarkRootObject(Root root, HeapObject obj) {
-  //if (marking_state()->WhiteToGrey(obj)) {
+  if (marking_state()->WhiteToGrey(obj)) {
     local_marking_worklists()->Push(obj);
+    if (V8_UNLIKELY(FLAG_track_retaining_path)) {
+      heap_->AddRetainingRoot(root, obj);
+    }
     if (obj.IsJSObject() && !obj.IsJSFunction()) {
       obj.Print();
     }
-  //}
+  }
 }
 
 } // namespace internal
